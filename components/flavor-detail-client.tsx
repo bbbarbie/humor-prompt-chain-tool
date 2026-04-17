@@ -179,6 +179,7 @@ export function FlavorDetailClient({
   const [createStepOpen, setCreateStepOpen] = useState(false);
   const [savingFlavor, setSavingFlavor] = useState(false);
   const [savingStep, setSavingStep] = useState(false);
+  const [duplicatingFlavor, setDuplicatingFlavor] = useState(false);
   const [selectedImageId, setSelectedImageId] = useState(testImages[0] ? String(testImages[0].id) : "");
   const [runnerLoading, setRunnerLoading] = useState(false);
   const [currentResult, setCurrentResult] = useState<StudioRunResult | null>(null);
@@ -263,6 +264,38 @@ export function FlavorDetailClient({
 
     router.push("/");
     router.refresh();
+  }
+
+  async function duplicateFlavor() {
+    if (!window.confirm("Duplicate this humor flavor and all of its linked steps?")) {
+      return;
+    }
+
+    setDuplicatingFlavor(true);
+    setErrorMessage(null);
+
+    try {
+      const response = await fetch(`/api/flavors/${encodeURIComponent(String(flavor.id))}/duplicate`, {
+        method: "POST",
+      });
+
+      const json = (await response.json().catch(() => null)) as { error?: string; flavor?: { id?: string | number } } | null;
+      if (!response.ok) {
+        throw new Error(json?.error || "Unable to duplicate flavor.");
+      }
+
+      const duplicatedId = json?.flavor?.id;
+      if (duplicatedId == null) {
+        throw new Error("Duplicate succeeded but no new flavor id was returned.");
+      }
+
+      router.push(`/flavors/${encodeURIComponent(String(duplicatedId))}`);
+      router.refresh();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to duplicate flavor.");
+    } finally {
+      setDuplicatingFlavor(false);
+    }
   }
 
   async function createStep() {
@@ -533,6 +566,14 @@ export function FlavorDetailClient({
                 className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm"
               >
                 Edit flavor
+              </button>
+              <button
+                type="button"
+                onClick={duplicateFlavor}
+                disabled={duplicatingFlavor}
+                className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm disabled:opacity-60"
+              >
+                {duplicatingFlavor ? "Duplicating..." : "Duplicate flavor"}
               </button>
               <button
                 type="button"

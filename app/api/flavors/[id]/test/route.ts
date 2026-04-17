@@ -7,6 +7,33 @@ type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
+function flattenPromptChain(promptChain: unknown): string {
+  if (!promptChain) return "";
+  if (typeof promptChain === "string") return promptChain;
+
+  if (Array.isArray(promptChain)) {
+    return promptChain
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          return Object.entries(item as Record<string, unknown>)
+            .map(([key, value]) => `${key}: ${String(value ?? "")}`)
+            .join("\n");
+        }
+        return String(item);
+      })
+      .join("\n\n");
+  }
+
+  if (typeof promptChain === "object") {
+    return Object.entries(promptChain as Record<string, unknown>)
+      .map(([key, value]) => `${key}: ${String(value ?? "")}`)
+      .join("\n");
+  }
+
+  return String(promptChain);
+}
+
 export async function POST(request: Request, context: RouteContext) {
   const auth = await requireStudioApiAccess();
   if ("error" in auth) return auth.error;
@@ -83,6 +110,19 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   const promptChain = buildPromptChain(steps);
+  const flavorPrompt = flattenPromptChain(promptChain);
+  const downstreamPayload = {
+    imageId,
+    promptChain,
+    flavorPrompt,
+  };
+
+  console.info("[flavor-test] downstream payload", {
+    flavorId: id,
+    imageId,
+    hasPromptChain: promptChain.length > 0,
+    flavorPromptPreview: flavorPrompt.slice(0, 300),
+  });
 
   const response = await fetch(downstreamUrl, {
     method: "POST",
@@ -90,9 +130,7 @@ export async function POST(request: Request, context: RouteContext) {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      imageId,
-    }),
+    body: JSON.stringify(downstreamPayload),
   });
 
   console.info("[flavor-test] downstream response received", {

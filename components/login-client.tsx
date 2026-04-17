@@ -48,6 +48,9 @@ export function LoginClient() {
         <p className="mt-4 max-w-md text-sm leading-6 text-[color:var(--muted-foreground)]">
           Sign in to build, edit, and test humor generation workflows
         </p>
+        <p className="mt-5 rounded-2xl border border-[color:var(--border-strong)] bg-[color:var(--accent-soft)] px-4 py-3 text-base font-semibold leading-6 text-[color:var(--foreground)]">
+          Use your Columbia email to sign in with Google.
+        </p>
         <p className="mt-3 max-w-md text-sm leading-6 text-[color:var(--muted-foreground)]">
           Authorized superadmins and matrix admins only
         </p>

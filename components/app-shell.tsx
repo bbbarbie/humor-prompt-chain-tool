@@ -38,6 +38,12 @@ export function AppShell({
             >
               Dashboard
             </Link>
+            <Link
+              href="/stats"
+              className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--muted-foreground)] transition hover:border-[color:var(--border-strong)] hover:text-[color:var(--foreground)]"
+            >
+              Stats
+            </Link>
             {email ? (
               <div className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--muted-foreground)]">
                 {email}
