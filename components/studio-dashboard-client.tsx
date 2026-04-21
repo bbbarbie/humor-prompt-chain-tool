@@ -12,6 +12,19 @@ type FlavorFormState = {
   slug: string;
 };
 
+type DeleteFlavorResponse = {
+  error?: string;
+  linkedStepCount?: number;
+} | null;
+
+function getBlockedDeleteMessage(stepCount: number) {
+  if (stepCount === 1) {
+    return "This humor flavor has 1 linked step. Remove it first before deleting the flavor.";
+  }
+
+  return `This humor flavor has ${stepCount} linked steps. Remove them first before deleting the flavor.`;
+}
+
 function FlavorForm({
   value,
   onChange,
@@ -71,7 +84,9 @@ export function StudioDashboardClient({ flavors }: { flavors: FlavorSummary[] })
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [editingFlavor, setEditingFlavor] = useState<FlavorSummary | null>(null);
+  const [deleteDialogFlavor, setDeleteDialogFlavor] = useState<FlavorSummary | null>(null);
   const [loading, setLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [form, setForm] = useState<FlavorFormState>({ description: "", slug: "" });
 
@@ -152,24 +167,44 @@ export function StudioDashboardClient({ flavors }: { flavors: FlavorSummary[] })
     }
   }
 
-  async function deleteFlavor(id: PrimitiveId) {
-    if (!window.confirm("Delete this humor flavor? Deletion is blocked while steps still exist.")) {
-      return;
-    }
+  function closeDeleteDialog() {
+    if (deletingId) return;
+    setDeleteDialogFlavor(null);
+  }
 
+  async function confirmDeleteFlavor() {
+    if (!deleteDialogFlavor) return;
+
+    const key = String(deleteDialogFlavor.id);
+    setDeletingId(key);
     setErrorMessage(null);
 
-    const response = await fetch(`/api/flavors/${encodeURIComponent(String(id))}`, {
-      method: "DELETE",
-    });
+    try {
+      const response = await fetch(`/api/flavors/${encodeURIComponent(key)}`, {
+        method: "DELETE",
+      });
 
-    const json = (await response.json().catch(() => null)) as { error?: string } | null;
-    if (!response.ok) {
-      setErrorMessage(json?.error || "Unable to delete humor flavor.");
-      return;
+      const json = (await response.json().catch(() => null)) as DeleteFlavorResponse;
+      if (!response.ok) {
+        if (response.status === 409 && typeof json?.linkedStepCount === "number") {
+          setDeleteDialogFlavor((current) => {
+            if (!current || String(current.id) !== key) return current;
+            return { ...current, stepCount: json.linkedStepCount ?? current.stepCount };
+          });
+          return;
+        }
+
+        throw new Error(json?.error || "Unable to delete humor flavor.");
+      }
+
+      setDeleteDialogFlavor(null);
+      router.refresh();
+    } catch (error) {
+      setDeleteDialogFlavor(null);
+      setErrorMessage(error instanceof Error ? error.message : "Unable to delete humor flavor.");
+    } finally {
+      setDeletingId(null);
     }
-
-    router.refresh();
   }
 
   async function duplicateFlavor(id: PrimitiveId) {
@@ -198,6 +233,10 @@ export function StudioDashboardClient({ flavors }: { flavors: FlavorSummary[] })
       setDuplicatingId(null);
     }
   }
+
+  const deleteStepCount = deleteDialogFlavor?.stepCount ?? 0;
+  const deleteBlocked = deleteStepCount > 0;
+  const deletePending = deleteDialogFlavor ? deletingId === String(deleteDialogFlavor.id) : false;
 
   return (
     <>
@@ -355,7 +394,10 @@ export function StudioDashboardClient({ flavors }: { flavors: FlavorSummary[] })
               </button>
               <button
                 type="button"
-                onClick={() => deleteFlavor(flavor.id)}
+                onClick={() => {
+                  setErrorMessage(null);
+                  setDeleteDialogFlavor(flavor);
+                }}
                 className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm text-[color:var(--danger)]"
               >
                 Delete
@@ -387,6 +429,52 @@ export function StudioDashboardClient({ flavors }: { flavors: FlavorSummary[] })
         onClose={() => setEditingFlavor(null)}
       >
         <FlavorForm value={form} onChange={setForm} onSubmit={saveEdit} submitLabel="Save changes" loading={loading} />
+      </Modal>
+
+      <Modal
+        open={Boolean(deleteDialogFlavor)}
+        title={deleteBlocked ? "Cannot delete humor flavor" : "Delete humor flavor?"}
+        description={
+          deleteDialogFlavor
+            ? deleteBlocked
+              ? getBlockedDeleteMessage(deleteStepCount)
+              : "Are you sure you want to delete this humor flavor? This action cannot be undone."
+            : undefined
+        }
+        onClose={closeDeleteDialog}
+        showHeaderClose={false}
+        closeDisabled={deletePending}
+      >
+        {deleteDialogFlavor ? (
+          <div className="flex flex-wrap justify-end gap-3">
+            <button
+              type="button"
+              onClick={closeDeleteDialog}
+              disabled={deletePending}
+              className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm disabled:opacity-60"
+            >
+              {deleteBlocked ? "Close" : "Cancel"}
+            </button>
+            {deleteBlocked ? (
+              <Link
+                href={`/flavors/${encodeURIComponent(String(deleteDialogFlavor.id))}`}
+                onClick={() => setDeleteDialogFlavor(null)}
+                className="rounded-full bg-[color:var(--accent)] px-5 py-3 text-sm font-medium text-[color:var(--accent-foreground)]"
+              >
+                View/Edit Steps
+              </Link>
+            ) : (
+              <button
+                type="button"
+                onClick={confirmDeleteFlavor}
+                disabled={deletePending}
+                className="rounded-full bg-[color:var(--danger)] px-5 py-3 text-sm font-medium text-[color:var(--accent-foreground)] disabled:opacity-60"
+              >
+                {deletePending ? "Deleting..." : "Delete"}
+              </button>
+            )}
+          </div>
+        ) : null}
       </Modal>
     </>
   );

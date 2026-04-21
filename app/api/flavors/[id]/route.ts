@@ -60,7 +60,10 @@ export async function DELETE(_request: Request, context: RouteContext) {
 
   if ((count ?? 0) > 0) {
     return NextResponse.json(
-      { error: "Delete blocked. Remove all steps in this humor flavor first." },
+      {
+        error: "Delete blocked. Remove all steps in this humor flavor first.",
+        linkedStepCount: count ?? 0,
+      },
       { status: 409 },
     );
   }
