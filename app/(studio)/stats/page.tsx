@@ -50,6 +50,12 @@ function getShare(count: number, total: number) {
   return (count / total) * 100;
 }
 
+function pctTone(pct: number): "positive" | "neutral" | "negative" {
+  if (pct > 50) return "positive";
+  if (pct < 50) return "negative";
+  return "neutral";
+}
+
 function createCaptionRows(rows: CaptionScoreRow[] | null | undefined) {
   return (rows ?? []).map((row) => ({
     id: String(row.id),
@@ -72,6 +78,14 @@ function createRanking(rows: RankedCaption[], direction: "asc" | "desc") {
 
 function fillRanking(rows: RankedCaption[]) {
   return Array.from({ length: 5 }, (_, index) => rows[index] ?? null);
+}
+
+function createAbsEngagementRanking(rows: RankedCaption[]) {
+  const sorted = [...rows].sort((a, b) => {
+    const diff = Math.abs(b.totalVotes) - Math.abs(a.totalVotes);
+    return diff !== 0 ? diff : a.displayText.localeCompare(b.displayText);
+  });
+  return sorted.slice(0, 5);
 }
 
 function createScoreDistributionFromCounts(counts: DistributionBucketCount[]) {
@@ -333,6 +347,16 @@ function RankingCard({ caption }: { caption: RankedCaption | null }) {
   );
 }
 
+function InsightRow({ text, tone }: { text: string; tone: "positive" | "neutral" | "negative" }) {
+  const { bar } = getToneClasses(tone);
+  return (
+    <li className="flex items-start gap-4 px-5 py-4">
+      <div className={`mt-2 h-2 w-2 shrink-0 rounded-full ${bar}`} />
+      <p className="text-sm leading-6 text-[color:var(--foreground)]">{text}</p>
+    </li>
+  );
+}
+
 export default async function CaptionStatsPage() {
   const { supabase } = await requireStudioPageAccess();
 
@@ -385,6 +409,37 @@ export default async function CaptionStatsPage() {
   const largestBucketCount = scoreDistribution.reduce((max, bucket) => Math.max(max, bucket.count), 0);
   const topCaptions = fillRanking(scoreSectionError ? [] : createRanking(captionScores, "desc"));
   const bottomCaptions = fillRanking(scoreSectionError ? [] : createRanking(captionScores, "asc"));
+  const mostEngagedCaptions = fillRanking(scoreSectionError ? [] : createAbsEngagementRanking(captionScores));
+
+  const positiveScoreCaptions = distributionSectionError ? 0 : (strongPositiveCount ?? 0) + (positiveCount ?? 0);
+  const positiveScoreSharePct =
+    totalScoredCaptions > 0 ? (positiveScoreCaptions / totalScoredCaptions) * 100 : 0;
+  const positiveVoteSharePct = totalVotes > 0 ? (upvotes / totalVotes) * 100 : 0;
+  const dominantBucket = scoreDistribution.reduce(
+    (max, b) => (b.count > max.count ? b : max),
+    scoreDistribution[0]
+  );
+
+  const insights: Array<{ text: string; tone: "positive" | "neutral" | "negative" }> = [
+    totalVotes > 0
+      ? {
+          text: `${positiveVoteSharePct.toFixed(1)}% of all ${totalVotes.toLocaleString()} cast votes are upvotes, for a net vote difference of ${formatSignedValue(netVoteDifference)}.`,
+          tone: pctTone(positiveVoteSharePct),
+        }
+      : { text: "No votes have been recorded yet.", tone: "neutral" },
+    totalScoredCaptions > 0
+      ? {
+          text: `${positiveScoreSharePct.toFixed(1)}% of scored captions carry a net-positive score — ${positiveScoreCaptions} out of ${totalScoredCaptions}.`,
+          tone: pctTone(positiveScoreSharePct),
+        }
+      : { text: "No scored captions found.", tone: "neutral" },
+    !distributionSectionError && largestBucketCount > 0
+      ? {
+          text: `The most common score category is "${dominantBucket.label}" with ${dominantBucket.count} caption${dominantBucket.count === 1 ? "" : "s"}.`,
+          tone: dominantBucket.tone,
+        }
+      : { text: "Score distribution data is unavailable.", tone: "neutral" },
+  ];
 
   const heroBarValues = [
     Math.min(totalVotes / 25, 1),
@@ -516,7 +571,20 @@ export default async function CaptionStatsPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-2">
+      <section className="rounded-[28px] border border-[color:var(--border)] bg-[color:var(--panel)] p-5 shadow-[var(--shadow-soft)]">
+        <p className="text-[11px] uppercase tracking-[0.32em] text-[color:var(--muted-foreground)]">Key Insights</p>
+        <h3 className="mt-2 font-serif text-4xl tracking-tight">Key Insights</h3>
+        <p className="mt-3 max-w-2xl text-sm leading-7 text-[color:var(--muted-foreground)]">
+          Factual takeaways computed directly from <code>caption_votes</code> and <code>caption_scores</code>.
+        </p>
+        <ul className="mt-6 divide-y divide-[color:var(--border)] overflow-hidden rounded-[22px] border border-[color:var(--border)] bg-[color:var(--panel-strong)]">
+          {insights.map((insight, index) => (
+            <InsightRow key={index} text={insight.text} tone={insight.tone} />
+          ))}
+        </ul>
+      </section>
+
+      <section className="grid gap-4 xl:grid-cols-3">
         <div className="rounded-[28px] border border-[color:var(--border)] bg-[color:var(--panel)] p-5 shadow-[var(--shadow-soft)]">
           <p className="text-[11px] uppercase tracking-[0.32em] text-[color:var(--muted-foreground)]">Top Captions</p>
           <h3 className="mt-2 font-serif text-4xl tracking-tight">Highest total votes</h3>
@@ -527,6 +595,25 @@ export default async function CaptionStatsPage() {
               <SectionMessage>No caption score data yet.</SectionMessage>
             ) : (
               topCaptions.map((caption, index) => <RankingCard key={caption?.id ?? `top-empty-${index}`} caption={caption} />)
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-[28px] border border-[color:var(--border)] bg-[color:var(--panel)] p-5 shadow-[var(--shadow-soft)]">
+          <p className="text-[11px] uppercase tracking-[0.32em] text-[color:var(--muted-foreground)]">Most Engaged</p>
+          <h3 className="mt-2 font-serif text-4xl tracking-tight">Strongest signal</h3>
+          <p className="mt-3 text-sm leading-6 text-[color:var(--muted-foreground)]">
+            Ranked by absolute vote score — strong audience reaction regardless of direction.
+          </p>
+          <div className="mt-5 space-y-3">
+            {scoreSectionError ? (
+              <SectionMessage>Caption rankings are unavailable right now for this section.</SectionMessage>
+            ) : totalScoredCaptions === 0 ? (
+              <SectionMessage>No caption score data yet.</SectionMessage>
+            ) : (
+              mostEngagedCaptions.map((caption, index) => (
+                <RankingCard key={caption?.id ?? `engaged-empty-${index}`} caption={caption} />
+              ))
             )}
           </div>
         </div>
