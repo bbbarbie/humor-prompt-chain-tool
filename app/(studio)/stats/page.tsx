@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Metadata } from "next";
+import Image from "next/image";
 import { requireStudioPageAccess } from "@/lib/auth";
 import { STUDIO_APP_NAME } from "@/lib/navigation";
 
@@ -12,12 +13,23 @@ type CaptionScoreRow = {
   id: string | number;
   display_text: string | null;
   total_votes: number | null;
+  image_id?: string | number | null;
+  imageId?: string | number | null;
+  image_url?: string | null;
+  imageUrl?: string | null;
+  thumbnail_url?: string | null;
+  thumbnailUrl?: string | null;
+  image_reference?: string | null;
+  imageReference?: string | null;
+  image?: { url?: string | null; image_url?: string | null; thumbnail_url?: string | null } | null;
 };
 
 type RankedCaption = {
   id: string;
   displayText: string;
   totalVotes: number;
+  imageUrl: string | null;
+  imageId: string | null;
 };
 
 type DistributionBucket = {
@@ -45,6 +57,17 @@ function formatSignedValue(value: number) {
   return `${value}`;
 }
 
+function getDistributionBarWidth(count: number, totalCount: number) {
+  if (count <= 0 || totalCount <= 0) return "0%";
+
+  const percentage = getShare(count, totalCount);
+  const minVisiblePercentage = 1;
+
+  if (percentage < minVisiblePercentage) return "3px";
+
+  return `${percentage}%`;
+}
+
 function getShare(count: number, total: number) {
   if (total <= 0) return 0;
   return (count / total) * 100;
@@ -56,12 +79,73 @@ function pctTone(pct: number): "positive" | "neutral" | "negative" {
   return "neutral";
 }
 
-function createCaptionRows(rows: CaptionScoreRow[] | null | undefined) {
+type ImageLookupRow = {
+  id: string | number;
+  url: string | null;
+};
+
+function getCaptionImageId(row: CaptionScoreRow) {
+  const rawValue = row.image_id ?? row.imageId;
+  if (rawValue === null || rawValue === undefined) return null;
+  return String(rawValue);
+}
+
+function createCaptionRows(
+  rows: CaptionScoreRow[] | null | undefined,
+  relatedImagesById: Map<string, ImageLookupRow>,
+) {
   return (rows ?? []).map((row) => ({
     id: String(row.id),
     displayText: row.display_text?.trim() || "Untitled caption",
     totalVotes: typeof row.total_votes === "number" ? row.total_votes : 0,
+    imageId: getCaptionImageId(row),
+    imageUrl: getCaptionImageUrl(row, relatedImagesById),
   }));
+}
+
+function isRenderableImageUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return /^https?:\/\//.test(trimmed) || trimmed.startsWith("/");
+}
+
+function getCaptionImageUrl(row: CaptionScoreRow, relatedImagesById: Map<string, ImageLookupRow>) {
+  const imageId = getCaptionImageId(row);
+  const relatedImage = imageId ? relatedImagesById.get(imageId) : null;
+  const candidates: unknown[] = [
+    row.image_url,
+    row.imageUrl,
+    row.thumbnail_url,
+    row.thumbnailUrl,
+    row.image?.url,
+    row.image?.image_url,
+    row.image?.thumbnail_url,
+    row.image_reference,
+    row.imageReference,
+    relatedImage?.url,
+  ];
+
+  const matched = candidates.find(isRenderableImageUrl);
+  return matched ?? null;
+}
+
+async function loadCaptionScoreRows(
+  supabase: Awaited<ReturnType<typeof requireStudioPageAccess>>["supabase"],
+) {
+  const queryAttempts = [
+    "id, display_text, total_votes, image_id, image_url, thumbnail_url, image_reference",
+    "*",
+  ];
+
+  for (const columns of queryAttempts) {
+    const result = await supabase.from("caption_scores").select(columns);
+    if (!result.error) {
+      return result;
+    }
+  }
+
+  return supabase.from("caption_scores").select("*");
 }
 
 function createRanking(rows: RankedCaption[], direction: "asc" | "desc") {
@@ -272,13 +356,14 @@ function VoteStatBlock({
 
 function DistributionRow({
   bucket,
-  largestCount,
+  totalCount,
 }: {
   bucket: DistributionBucket;
-  largestCount: number;
+  totalCount: number;
 }) {
   const { bar, badge } = getToneClasses(bucket.tone);
-  const width = largestCount > 0 ? (bucket.count / largestCount) * 100 : 0;
+  const width = getDistributionBarWidth(bucket.count, totalCount);
+  const percentage = totalCount > 0 ? bucket.count / totalCount : 0;
 
   return (
     <div className="grid gap-3 rounded-[22px] border border-[color:var(--border)] bg-[color:var(--panel)] p-4 md:grid-cols-[minmax(0,180px)_56px_minmax(0,1fr)] md:items-center">
@@ -288,11 +373,11 @@ function DistributionRow({
         <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-[color:var(--panel-muted)]">
           <div
             className={`h-full rounded-full transition-all duration-500 ${bar}`}
-            style={{ width: `${width}%` }}
+            style={{ width }}
           />
         </div>
         <span className={`inline-flex min-w-[58px] justify-center rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] ${badge}`}>
-          {largestCount > 0 ? formatRatio(bucket.count / largestCount) : "0.0%"}
+          {formatRatio(percentage)}
         </span>
       </div>
     </div>
@@ -302,7 +387,7 @@ function DistributionRow({
 function RankingCard({ caption }: { caption: RankedCaption | null }) {
   if (!caption) {
     return (
-      <article className="min-h-[148px] rounded-[24px] border border-[color:var(--border)] bg-[color:var(--panel)] p-5">
+      <article className="min-h-[132px] rounded-[24px] border border-[color:var(--border)] bg-[color:var(--panel)] p-5">
         <div className="flex gap-4">
           <div className="w-1 rounded-full bg-[color:var(--border)]" />
           <div className="flex-1">
@@ -317,8 +402,40 @@ function RankingCard({ caption }: { caption: RankedCaption | null }) {
   const tone = caption.totalVotes > 0 ? "positive" : caption.totalVotes < 0 ? "negative" : "neutral";
   const { badge, soft } = getToneClasses(tone);
 
+  if (caption.imageUrl) {
+    return (
+      <article className="group rounded-[24px] border border-[color:var(--border)] bg-[color:var(--panel)] p-4 shadow-[var(--shadow-soft)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_22px_54px_rgba(61,49,39,0.1)]">
+        <div className="flex items-start gap-3">
+          <div className={`mt-0.5 h-14 w-1 shrink-0 rounded-full ${soft}`} />
+          <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-2xl border border-[color:var(--border)] bg-[color:var(--panel-muted)]">
+            <Image src={caption.imageUrl} alt="" fill className="object-cover" sizes="56px" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p
+              className="text-sm leading-5 text-[color:var(--foreground)]"
+              style={{
+                display: "-webkit-box",
+                WebkitBoxOrient: "vertical",
+                WebkitLineClamp: 2,
+                overflow: "hidden",
+              }}
+            >
+              {caption.displayText}
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.22em] text-[color:var(--muted-foreground)]">
+              <span>Total votes: {caption.totalVotes}</span>
+            </div>
+          </div>
+          <span className={`inline-flex shrink-0 rounded-full px-3 py-1.5 text-xs font-medium transition-colors duration-200 ${badge}`}>
+            {formatSignedValue(caption.totalVotes)}
+          </span>
+        </div>
+      </article>
+    );
+  }
+
   return (
-    <article className="group min-h-[148px] rounded-[24px] border border-[color:var(--border)] bg-[color:var(--panel)] p-5 shadow-[var(--shadow-soft)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_22px_54px_rgba(61,49,39,0.1)]">
+    <article className="group min-h-[132px] rounded-[24px] border border-[color:var(--border)] bg-[color:var(--panel)] p-5 shadow-[var(--shadow-soft)] transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_22px_54px_rgba(61,49,39,0.1)]">
       <div className="flex gap-4">
         <div className={`w-1 rounded-full ${soft}`} />
         <div className="flex-1">
@@ -360,6 +477,7 @@ function InsightRow({ text, tone }: { text: string; tone: "positive" | "neutral"
 export default async function CaptionStatsPage() {
   const { supabase } = await requireStudioPageAccess();
 
+  const captionScoresResultPromise = loadCaptionScoreRows(supabase);
   const [
     { data: captionScoresData, error: captionScoresError },
     { count: totalVoteCount, error: totalVotesError },
@@ -371,7 +489,7 @@ export default async function CaptionStatsPage() {
     { count: negativeCount, error: negativeError },
     { count: strongNegativeCount, error: strongNegativeError },
   ] = await Promise.all([
-    supabase.from("caption_scores").select("id, display_text, total_votes"),
+    captionScoresResultPromise,
     supabase.from("caption_votes").select("vote_value", { count: "exact", head: true }),
     supabase.from("caption_votes").select("vote_value", { count: "exact", head: true }).eq("vote_value", 1),
     supabase.from("caption_votes").select("vote_value", { count: "exact", head: true }).eq("vote_value", -1),
@@ -382,9 +500,26 @@ export default async function CaptionStatsPage() {
     supabase.from("caption_scores").select("id", { count: "exact", head: true }).lte("total_votes", -10),
   ]);
 
-  const captionScores = createCaptionRows((captionScoresData ?? []) as CaptionScoreRow[]);
+  const captionScoreRows = (captionScoresData ?? []) as CaptionScoreRow[];
+  const relatedImageIds = Array.from(
+    new Set(
+      captionScoreRows
+        .map((row) => getCaptionImageId(row))
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+
+  const { data: relatedImagesData, error: relatedImagesError } = relatedImageIds.length
+    ? await supabase.from("images").select("id, url").in("id", relatedImageIds)
+    : { data: [], error: null };
+
+  const relatedImagesById = new Map(
+    ((relatedImagesData ?? []) as ImageLookupRow[]).map((image) => [String(image.id), image])
+  );
+
+  const captionScores = createCaptionRows(captionScoreRows, relatedImagesById);
   const voteSectionError = totalVotesError || upvotesError || downvotesError;
-  const scoreSectionError = captionScoresError;
+  const scoreSectionError = captionScoresError || relatedImagesError;
   const distributionSectionError =
     strongPositiveError || positiveError || neutralError || negativeError || strongNegativeError;
 
@@ -406,10 +541,29 @@ export default async function CaptionStatsPage() {
         { label: "Negative", count: negativeCount ?? 0 },
         { label: "Strong Negative", count: strongNegativeCount ?? 0 },
       ]);
+  const totalDistributionCount = scoreDistribution.reduce((sum, bucket) => sum + bucket.count, 0);
   const largestBucketCount = scoreDistribution.reduce((max, bucket) => Math.max(max, bucket.count), 0);
   const topCaptions = fillRanking(scoreSectionError ? [] : createRanking(captionScores, "desc"));
   const bottomCaptions = fillRanking(scoreSectionError ? [] : createRanking(captionScores, "asc"));
   const mostEngagedCaptions = fillRanking(scoreSectionError ? [] : createAbsEngagementRanking(captionScores));
+
+  if (captionScores.length > 0) {
+    const debugCaption = captionScores[0];
+    const sourceRow = captionScoreRows.find((row) => String(row.id) === debugCaption.id);
+    console.log("[stats] caption image debug", {
+      captionId: debugCaption.id,
+      displayText: debugCaption.displayText,
+      totalVotes: debugCaption.totalVotes,
+      sourceTable: "caption_scores",
+      sourceDisplayText: sourceRow?.display_text ?? null,
+      sourceImageId: sourceRow ? getCaptionImageId(sourceRow) : null,
+      sourceImageUrl: sourceRow?.image_url ?? sourceRow?.imageUrl ?? null,
+      sourceThumbnailUrl: sourceRow?.thumbnail_url ?? sourceRow?.thumbnailUrl ?? null,
+      sourceImageReference: sourceRow?.image_reference ?? sourceRow?.imageReference ?? null,
+      joinedImageUrl: debugCaption.imageId ? relatedImagesById.get(debugCaption.imageId)?.url ?? null : null,
+      resolvedImageUrl: debugCaption.imageUrl,
+    });
+  }
 
   const positiveScoreCaptions = distributionSectionError ? 0 : (strongPositiveCount ?? 0) + (positiveCount ?? 0);
   const positiveScoreSharePct =
@@ -566,7 +720,11 @@ export default async function CaptionStatsPage() {
 
         <div className="mt-6 space-y-3">
           {scoreDistribution.map((bucket) => (
-            <DistributionRow key={bucket.label} bucket={bucket} largestCount={largestBucketCount} />
+            <DistributionRow
+              key={bucket.label}
+              bucket={bucket}
+              totalCount={totalDistributionCount}
+            />
           ))}
         </div>
       </section>
